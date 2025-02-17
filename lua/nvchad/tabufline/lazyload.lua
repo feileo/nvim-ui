@@ -1,48 +1,52 @@
-local opts = require("nvconfig").ui.tabufline
-local api = vim.api
-local get_opt = api.nvim_get_option_value
-local cur_buf = api.nvim_get_current_buf
-local autocmd = vim.api.nvim_create_autocmd
+local opts = require("core.utils").load_config().ui.tabufline
 
--- store listed buffers in tab l
-vim.t.bufs = vim.t.bufs
-  or vim.tbl_filter(function(buf)
-    return vim.fn.buflisted(buf) == 1
-  end, vim.api.nvim_list_bufs())
+-- store listed buffers in tab local var
+vim.t.bufs = vim.api.nvim_list_bufs()
+
+local listed_bufs = {}
+
+for _, val in ipairs(vim.t.bufs) do
+  if vim.bo[val].buflisted then
+    table.insert(listed_bufs, val)
+  end
+end
+
+vim.t.bufs = listed_bufs
 
 -- autocmds for tabufline -> store bufnrs on bufadd, bufenter events
 -- thx to https://github.com/ii14 & stores buffer per tab -> table
-autocmd({ "BufAdd", "BufEnter", "tabnew" }, {
+vim.api.nvim_create_autocmd({ "BufAdd", "BufEnter", "tabnew" }, {
   callback = function(args)
     local bufs = vim.t.bufs
-    local is_curbuf = cur_buf() == args.buf
 
-    if bufs == nil then
-      bufs = cur_buf() == args.buf and {} or { args.buf }
+    if vim.t.bufs == nil then
+      vim.t.bufs = vim.api.nvim_get_current_buf() == args.buf and {} or { args.buf }
     else
       -- check for duplicates
       if
         not vim.tbl_contains(bufs, args.buf)
-        and (args.event == "BufEnter" or not is_curbuf or get_opt("buflisted", { buf = args.buf }))
-        and api.nvim_buf_is_valid(args.buf)
-        and get_opt("buflisted", { buf = args.buf })
+        and (args.event == "BufEnter" or vim.bo[args.buf].buflisted or args.buf ~= vim.api.nvim_get_current_buf())
+        and vim.api.nvim_buf_is_valid(args.buf)
+        and vim.bo[args.buf].buflisted
       then
         table.insert(bufs, args.buf)
+        vim.t.bufs = bufs
       end
     end
 
     -- remove unnamed buffer which isnt current buf & modified
     if args.event == "BufAdd" then
-      if #api.nvim_buf_get_name(bufs[1]) == 0 and not get_opt("modified", { buf = bufs[1] }) then
+      local first_buf = vim.t.bufs[1]
+
+      if #vim.api.nvim_buf_get_name(first_buf) == 0 and not vim.api.nvim_buf_get_option(first_buf, "modified") then
         table.remove(bufs, 1)
+        vim.t.bufs = bufs
       end
     end
-
-    vim.t.bufs = bufs
   end,
 })
 
-autocmd("BufDelete", {
+vim.api.nvim_create_autocmd("BufDelete", {
   callback = function(args)
     for _, tab in ipairs(vim.api.nvim_list_tabpages()) do
       local bufs = vim.t[tab].bufs
@@ -59,26 +63,21 @@ autocmd("BufDelete", {
   end,
 })
 
+require("core.utils").load_mappings "tabufline"
+
 if opts.lazyload then
   vim.api.nvim_create_autocmd({ "BufNew", "BufNewFile", "BufRead", "TabEnter", "TermOpen" }, {
     pattern = "*",
     group = vim.api.nvim_create_augroup("TabuflineLazyLoad", {}),
     callback = function()
       if #vim.fn.getbufinfo { buflisted = 1 } >= 2 or #vim.api.nvim_list_tabpages() >= 2 then
-        vim.o.showtabline = 2
-        vim.o.tabline = "%!v:lua.require('nvchad.tabufline.modules')()"
+        vim.opt.showtabline = 2
+        vim.opt.tabline = "%!v:lua.require('nvchad.tabufline.modules').run()"
         vim.api.nvim_del_augroup_by_name "TabuflineLazyLoad"
       end
     end,
   })
 else
-  vim.o.showtabline = 2
-  vim.o.tabline = "%!v:lua.require('nvchad.tabufline.modules')()"
+  vim.opt.showtabline = 2
+  vim.opt.tabline = "%!v:lua.require('nvchad.tabufline.modules').run()"
 end
-
-autocmd("FileType", {
-  pattern = "qf",
-  callback = function()
-    vim.opt_local.buflisted = false
-  end,
-})
